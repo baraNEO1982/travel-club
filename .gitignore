@@ -1,0 +1,5 @@
+source/node_modules/
+source/dist-web/
+source/*.tsbuildinfo
+.env*
+.DS_Store
