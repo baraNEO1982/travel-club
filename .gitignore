@@ -3,3 +3,6 @@ source/dist-web/
 source/*.tsbuildinfo
 .env*
 .DS_Store
+
+source/.wrangler/
+source/.dev.vars

@@ -1,0 +1,54 @@
+import { scrypt, timingSafeEqual } from 'node:crypto';
+import { Buffer } from 'node:buffer';
+interface Env { DB:D1Database; PHOTOS:KVNamespace; ASSETS:Fetcher; }
+const now=()=>Math.floor(Date.now()/1000);
+const token=()=>crypto.randomUUID().replaceAll('-','')+crypto.randomUUID().replaceAll('-','');
+const hash=async(s:string)=>Buffer.from(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(s))).toString('hex');
+function fail(status:number,message:string):never{throw new Response(JSON.stringify({error:message}),{status,headers:{'Content-Type':'application/json'}});}
+function json(data:unknown,status=200,headers:Record<string,string>={}){return new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json',...headers}});}
+function derive(password:string,salt:string):Promise<Buffer>{return new Promise((resolve,reject)=>scrypt(password,salt,32,{N:16384,r:8,p:5,maxmem:64*1024*1024},(e,key)=>e?reject(e):resolve(key)));}
+async function makePassword(password:string){const salt=token();return `scrypt$16384$8$5$${salt}$${(await derive(password,salt)).toString('hex')}`;}
+async function verify(password:string,stored:string){const parts=stored.split('$');const actual=await derive(password,parts[4]);return timingSafeEqual(actual,Buffer.from(parts[5],'hex'));}
+const cookie=(value:string,age=2592000)=>`__Host-club=${value}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=${age}`;
+async function rate(env:Env,key:string,limit:number,seconds:number){const bucket=Math.floor(now()/seconds);const k=await hash(key+':'+bucket);const r=await env.DB.prepare('INSERT INTO rate_limits(key,count,expires) VALUES(?,1,?) ON CONFLICT(key) DO UPDATE SET count=count+1 RETURNING count').bind(k,(bucket+1)*seconds).first<{count:number}>();if(!r||r.count>limit)fail(429,'Слишком много попыток. Попробуйте позже.');}
+async function limitedBody(req:Request,max:number){const reader=req.body?.getReader();if(!reader)return new Uint8Array();const parts:Uint8Array[]=[];let size=0;for(;;){const {done,value}=await reader.read();if(done)break;size+=value.length;if(size>max){await reader.cancel();fail(413,'Слишком большой запрос.');}parts.push(value);}const result=new Uint8Array(size);let offset=0;for(const part of parts){result.set(part,offset);offset+=part.length;}return result;}
+async function data(req:Request){if(!req.headers.get('content-type')?.startsWith('application/json'))fail(415,'Нужен JSON.');const s=new TextDecoder().decode(await limitedBody(req,160000));if(s.length>40000)fail(413,'Слишком большой запрос.');try{return JSON.parse(s);}catch{fail(400,'Некорректный запрос.');}}
+function str(v:unknown,max:number,min=1){if(typeof v!=='string'||v.trim().length<min||v.length>max)fail(400,'Проверьте заполнение полей.');return v.trim();}
+async function user(req:Request,env:Env){const raw=req.headers.get('cookie')?.match(/(?:^|;\s*)__Host-club=([a-f0-9]{64})(?:;|$)/)?.[1];if(!raw)return null;return env.DB.prepare('SELECT m.id,m.username,m.name FROM sessions s JOIN members m ON m.id=s.user_id WHERE s.hash=? AND s.expires>? AND m.active=1').bind(await hash(raw),now()).first<{id:string;username:string;name:string}>();}
+async function session(env:Env,id:string){const raw=token();await env.DB.prepare('INSERT INTO sessions(hash,user_id,expires) VALUES(?,?,?)').bind(await hash(raw),id,now()+2592000).run();return cookie(raw);}
+async function route(req:Request,env:Env){const url=new URL(req.url);const path=url.pathname;const post=req.method==='POST';if(!path.startsWith('/api/'))return env.ASSETS.fetch(req);
+ if(!['GET','POST'].includes(req.method))fail(405,'Метод недоступен.');
+ if(post&&req.headers.get('origin')!==url.origin)fail(403,'Обновите страницу и попробуйте снова.');
+ const ip=req.headers.get('CF-Connecting-IP')||'local';
+ if(post&&(path==='/api/login'||path==='/api/register')){
+  await rate(env,'auth:'+ip,20,900);const b=await data(req);const username=str(b.username,32,3).toLowerCase();if(!/^[a-z0-9_]{3,32}$/.test(username))fail(400,'Логин: 3–32 латинские буквы, цифры или знак _.');const password=typeof b.password==='string'?b.password:'';if(password.length<12||password.length>128)fail(400,'Пароль: от 12 до 128 символов.');
+  await rate(env,'username:'+username,15,900);
+  if(path==='/api/register'){
+   const invite=str(b.invite,64,64);const ih=await hash(invite);const valid=await env.DB.prepare('SELECT hash FROM invitations WHERE hash=? AND used_by IS NULL AND expires>?').bind(ih,now()).first();if(!valid)fail(403,'Приглашение истекло или уже использовано.');
+   const id=crypto.randomUUID(),name=str(b.name,80);const passwordHash=await makePassword(password);
+   try{await env.DB.prepare('INSERT INTO members(id,username,name,password,invite_hash,created_at) VALUES(?,?,?,?,?,?)').bind(id,username,name,passwordHash,ih,now()).run();}catch(e){if(String(e).includes('members.username'))fail(409,'Этот логин уже занят.');if(/invitation|invite_hash/.test(String(e)))fail(403,'Приглашение истекло или уже использовано.');throw e;}
+   return json({user:{id,username,name}},201,{'Set-Cookie':await session(env,id)});
+  }
+  const m=await env.DB.prepare('SELECT id,username,name,password FROM members WHERE username=? AND active=1').bind(username).first<{id:string;username:string;name:string;password:string}>();
+  // Equal-cost verification for unknown usernames.
+  const fallback='scrypt$16384$8$5$0000000000000000000000000000000000000000000000000000000000000000$'+'00'.repeat(32);
+  if(!await verify(password,m?.password||fallback)||!m)fail(401,'Проверьте логин и пароль.');return json({user:{id:m.id,username:m.username,name:m.name}},200,{'Set-Cookie':await session(env,m.id)});
+ }
+ const m=await user(req,env);if(path==='/api/me'&&!post)return json({user:m});if(!m)fail(401,'Войдите в клуб.');
+ if(post)await rate(env,'write:'+m.id,120,3600);
+ if(path==='/api/logout'&&post){const raw=req.headers.get('cookie')?.match(/__Host-club=([a-f0-9]{64})/)?.[1];if(raw)await env.DB.prepare('DELETE FROM sessions WHERE hash=?').bind(await hash(raw)).run();return json({ok:true},200,{'Set-Cookie':cookie('',0)});}
+ if(path==='/api/invites'&&post){await rate(env,'invite:'+m.id,20,86400);const raw=token();await env.DB.prepare('INSERT INTO invitations(hash,creator,expires) VALUES(?,?,?)').bind(await hash(raw),m.id,now()+604800).run();return json({token:raw},201);}
+ if(path==='/api/trips'&&!post){const rows=await env.DB.prepare('SELECT t.*,m.name AS author FROM trips t JOIN members m ON m.id=t.author_id ORDER BY t.created_at DESC LIMIT 200').all();const photos=await env.DB.prepare('SELECT id,trip_id FROM photos WHERE ready=1 ORDER BY position').all<{id:string;trip_id:string}>();return json({trips:rows.results.map(t=>({...t,photos:photos.results.filter(p=>p.trip_id===t.id).map(p=>'/api/photos/'+p.id)}))});}
+ if(path==='/api/trips'&&post){const b=await data(req),id=b.id?str(b.id,36,36):crypto.randomUUID();if(!/^[a-f0-9-]{36}$/.test(id))fail(400,'Некорректный ID.');const previous=await env.DB.prepare('SELECT author_id FROM trips WHERE id=?').bind(id).first<{author_id:string}>();if(previous){if(previous.author_id!==m.id)fail(403,'Нет доступа.');return json({id});}await env.DB.prepare('INSERT INTO trips(id,author_id,title,place,body,created_at) VALUES(?,?,?,?,?,?)').bind(id,m.id,str(b.title,140),str(b.place||'',120,0),str(b.body,30000),now()).run();return json({id},201);}
+ const comments=path.match(/^\/api\/trips\/([a-f0-9-]{36})\/comments$/);
+ if(comments){const tid=comments[1];if(!await env.DB.prepare('SELECT id FROM trips WHERE id=?').bind(tid).first())fail(404,'Рассказ не найден.');if(!post)return json({comments:(await env.DB.prepare('SELECT c.id,c.body,m.name AS author FROM comments c JOIN members m ON m.id=c.author_id WHERE c.trip_id=? ORDER BY c.created_at,c.rowid').bind(tid).all()).results});const b=await data(req),body=str(b.body,4000),id=crypto.randomUUID();await env.DB.prepare('INSERT INTO comments(id,trip_id,author_id,body,created_at) VALUES(?,?,?,?,?)').bind(id,tid,m.id,body,now()).run();return json({id,body,author:m.name},201);}
+ const upload=path.match(/^\/api\/trips\/([a-f0-9-]{36})\/photos$/);
+ if(upload&&post){const tid=upload[1];if(!await env.DB.prepare('SELECT id FROM trips WHERE id=? AND author_id=?').bind(tid,m.id).first())fail(403,'Фотографии может добавить только автор.');await rate(env,'photos:'+m.id,100,86400);if(Number(req.headers.get('content-length'))>1000000)fail(413,'Фото слишком большое.');const bytes=await limitedBody(req,1000000);if(bytes.byteLength>1000000||bytes.byteLength<4)fail(413,'Фото должно быть меньше 1 МБ.');const magic=bytes;if(magic[0]!==255||magic[1]!==216||magic[2]!==255)fail(415,'Нужна фотография JPEG.');const id=req.headers.get('X-Photo-Id')||crypto.randomUUID();if(!/^[a-f0-9-]{36}$/.test(id))fail(400,'Некорректный ID.');const previous=await env.DB.prepare('SELECT trip_id,ready FROM photos WHERE id=?').bind(id).first<{trip_id:string;ready:number}>();if(previous){if(previous.trip_id!==tid)fail(403,'Нет доступа.');if(previous.ready)return json({id,url:'/api/photos/'+id});fail(409,'Фото ещё загружается. Повторите через минуту.');}
+  let r;try{r=await env.DB.prepare('INSERT INTO photos(id,trip_id,size,position) SELECT ?,?,?,COUNT(*) FROM photos WHERE trip_id=? HAVING COUNT(*)<12').bind(id,tid,bytes.byteLength,tid).run();}catch(e){if(String(e).includes('CHECK constraint'))fail(413,'Бесплатное место для фотографий заполнено.');throw e;}if(!r.meta.changes)fail(400,'Не больше 12 фотографий на рассказ.');
+  try{await env.PHOTOS.put(id,bytes);await env.DB.prepare('UPDATE photos SET ready=1 WHERE id=?').bind(id).run();}catch(e){await env.PHOTOS.delete(id).catch(()=>{});await env.DB.prepare('DELETE FROM photos WHERE id=?').bind(id).run();throw e;}return json({id,url:'/api/photos/'+id},201);
+ }
+ const photo=path.match(/^\/api\/photos\/([a-f0-9-]{36})$/);
+ if(photo&&!post){if(!await env.DB.prepare('SELECT id FROM photos WHERE id=? AND ready=1').bind(photo[1]).first())fail(404,'Фото не найдено.');const stream=await env.PHOTOS.get(photo[1],'stream');if(!stream)fail(503,'Фотография ещё загружается. Обновите страницу через минуту.');return new Response(stream,{headers:{'Content-Type':'image/jpeg'}});}
+ fail(404,'Страница не найдена.');
+}
+export default {async fetch(req:Request,env:Env){try{const response=await route(req,env);const r=new Response(response.body,response);if(new URL(req.url).pathname.startsWith('/api/')){r.headers.set('Cache-Control','no-store');r.headers.set('Vary','Cookie');}r.headers.set('X-Content-Type-Options','nosniff');r.headers.set('Referrer-Policy','no-referrer');r.headers.set('X-Frame-Options','DENY');return r;}catch(e){const r=e instanceof Response?e:json({error:'Не удалось выполнить действие. Попробуйте позже.'},503);r.headers.set('Cache-Control','no-store');return r;}}};
