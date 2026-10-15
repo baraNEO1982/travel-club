@@ -7,7 +7,7 @@ await build({entryPoints:['worker/club.ts'],bundle:true,format:'esm',platform:'n
 const mf=new Miniflare({modules:true,scriptPath:'.wrangler/club-test.mjs',compatibilityDate:'2026-05-22',compatibilityFlags:['nodejs_compat'],d1Databases:['DB'],kvNamespaces:['PHOTOS']});
 try{
  const db=await mf.getD1Database('DB');
- for(const file of ['0001.sql','0002_story_details.sql'])for(const statement of (await readFile('database/club/'+file,'utf8')).trim().split(/;\n(?=CREATE|INSERT|ALTER)/))await db.exec(statement.replaceAll('\n',' '));
+ for(const file of ['0001.sql','0002_story_details.sql','0003_email_recovery.sql'])for(const statement of (await readFile('database/club/'+file,'utf8')).trim().split(/;\n(?=CREATE|INSERT|ALTER)/))await db.exec(statement.replaceAll('\n',' '));
  const invitation=randomBytes(32).toString('hex');
  await db.prepare('INSERT INTO invitations(hash,expires) VALUES(?,?)').bind(createHash('sha256').update(invitation).digest('hex'),Math.floor(Date.now()/1000)+600).run();
  let cookie='';
