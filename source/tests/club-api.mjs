@@ -7,7 +7,7 @@ await build({entryPoints:['worker/club.ts'],bundle:true,format:'esm',platform:'n
 const mf=new Miniflare({modules:true,scriptPath:'.wrangler/club-test.mjs',compatibilityDate:'2026-05-22',compatibilityFlags:['nodejs_compat'],d1Databases:['DB'],kvNamespaces:['PHOTOS']});
 try{
  const db=await mf.getD1Database('DB');
- for(const statement of (await readFile('database/club/0001.sql','utf8')).trim().split(/;\n(?=CREATE|INSERT)/))await db.exec(statement.replaceAll('\n',' '));
+ for(const file of ['0001.sql','0002_story_details.sql'])for(const statement of (await readFile('database/club/'+file,'utf8')).trim().split(/;\n(?=CREATE|INSERT|ALTER)/))await db.exec(statement.replaceAll('\n',' '));
  const invitation=randomBytes(32).toString('hex');
  await db.prepare('INSERT INTO invitations(hash,expires) VALUES(?,?)').bind(createHash('sha256').update(invitation).digest('hex'),Math.floor(Date.now()/1000)+600).run();
  let cookie='';
@@ -29,6 +29,23 @@ try{
  const registrations=await Promise.all(['friend1','friend2'].map(username=>call('/register',{username,name:'Friend',password:'friend password 12345',invite})));assert.deepEqual(registrations.map(r=>r.status).sort(),[201,403]);
  const other=registrations.find(r=>r.status===201).response.headers.get('set-cookie').split(';')[0];
  response=await mf.dispatchFetch('https://club.test/api/trips/'+tid+'/photos',{method:'POST',headers:{origin:'https://club.test',cookie:other},body:bytes});assert.equal(response.status,403);
+ const editBody={title:'Updated trip',place:'New place',body:'More details',version:1,mutation:crypto.randomUUID()};
+ assert.equal((await call('/trips/'+tid+'/edit',editBody,{headers:{cookie:other}})).status,403);
+ assert.equal((await call('/trips/'+tid+'/edit',editBody)).status,200);
+ assert.equal((await call('/trips/'+tid+'/edit',editBody)).status,200);
+ assert.equal((await call('/trips/'+tid+'/edit',{...editBody,mutation:crypto.randomUUID()})).status,409);
+ const updated=(await call('/trips')).data.trips[0];assert.equal(updated.title,'Updated trip');assert.equal(updated.version,2);assert.equal(updated.photos.length,1);
+ assert.equal((await call('/photos/'+photo.id+'/caption',{caption:'Lake at sunrise'},{headers:{cookie:other}})).status,403);
+ assert.equal((await call('/photos/'+photo.id+'/caption',{caption:'Lake at sunrise'})).status,200);
+ assert.equal((await call('/photos/'+photo.id+'/comments',{body:'Beautiful view'},{headers:{cookie:other}})).status,201);
+ const details=await call('/photos/'+photo.id+'/details');assert.equal(details.data.caption,'Lake at sunrise');assert.equal(details.data.comments.length,1);
+ assert.equal((await call('/trips/'+tid+'/comments')).data.comments.length,1);
+ assert.equal((await call('/photos/'+crypto.randomUUID()+'/comments',{body:'No photo'})).status,404);
+ assert.equal((await call('/photos/'+photo.id+'/details',undefined,{headers:{cookie:''}})).status,401);
+ assert.equal((await call('/photos/'+photo.id+'/comments',{body:'Anonymous'},{headers:{cookie:''}})).status,401);
+ assert.equal((await call('/photos/'+photo.id+'/caption',{caption:''})).status,200);
+ response=await mf.dispatchFetch('https://club.test/api/trips/'+tid+'/photos',{method:'POST',headers:{origin:'https://club.test',cookie},body:bytes});assert.equal(response.status,201);assert.equal((await call('/trips')).data.trips[0].photos.length,2);
+ console.log('PASS: author-only story edits/captions, optimistic edit conflict, edit retry, preserve/add photos, separate photo comments, anonymous denial.');
  assert.equal((await call('/logout',{})).status,200);assert.equal((await call('/trips')).status,401);
  const login=await call('/login',{username:'owner',password:'test password 12345'});assert.equal(login.status,200);assert.equal((await call('/login',{username:'owner',password:'incorrect password'})).status,401);
  console.log('PASS: invite-only registration, replay/race rejection, password login, sessions/logout, CSRF, private stories/photos, comments, author-only upload.');
