@@ -62,6 +62,8 @@ final class ClubModel: ObservableObject {
         let response: URLResponse
         do { (data, response) = try await session.data(for: request) }
         catch let error as URLError {
+            // Discard broken connections after a network/VPN change. Never replay a POST.
+            await session.flush()
             switch error.code {
             case .cancelled: throw CancellationError()
             case .timedOut: throw ClubError(message: "Сервер не ответил вовремя. Попробуйте ещё раз.")
@@ -87,6 +89,9 @@ final class ClubModel: ObservableObject {
         var body: [String: Any] = ["username": username.trimmingCharacters(in: .whitespacesAndNewlines), "password": password]
         if let name, let invite { body["name"] = name; body["invite"] = invite }
         do {
+            // Login has no authenticated work in flight. Reset stale transport discovery
+            // and cookies from previous attempts before establishing a new session.
+            if member == nil { await session.reset() }
             let result: MemberResponse = try await api(invite == nil ? "/login" : "/register", body: body)
             guard let user = result.user else { throw ClubError(message: "Войдите в клуб ещё раз.") }
             member = user
