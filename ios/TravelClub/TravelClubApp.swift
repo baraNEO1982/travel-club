@@ -73,7 +73,7 @@ struct LoginView: View {
                 Text("Свои люди. Целый мир.").foregroundStyle(.secondary)
                 Text("Сохраняйте маршруты, фотографии и воспоминания в кругу близких.")
                 TextField("Логин", text: $username).textContentType(.username).keyboardType(.asciiCapable).textInputAutocapitalization(.never).autocorrectionDisabled().textFieldStyle(.roundedBorder)
-                SecureField("Пароль", text: $password).textContentType(.password).textFieldStyle(.roundedBorder)
+                PasswordField("Пароль", text: $password).textFieldStyle(.roundedBorder)
                 Button(club.busy ? "Входим…" : "Войти в клуб") {
                     Task { await club.authenticate(username: username, password: password); if club.member != nil { password = "" } }
                 }.buttonStyle(.borderedProminent).disabled(club.busy || username.isEmpty || password.isEmpty)

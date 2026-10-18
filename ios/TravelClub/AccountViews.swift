@@ -16,7 +16,7 @@ struct RegistrationView: View {
             Section("Ваша учётная запись") {
                 TextField("Имя", text: $name).textContentType(.name)
                 TextField("Логин", text: $username).textContentType(.username).keyboardType(.asciiCapable).textInputAutocapitalization(.never).autocorrectionDisabled()
-                SecureField("Пароль — от 12 символов", text: $password).textContentType(.newPassword)
+                PasswordField("Пароль — от 12 символов", text: $password, contentType: .newPassword)
                 Text("Логин: 3–32 латинские буквы, цифры или _. Пароль: 12–128 символов.").font(.caption)
             }
             if let error = club.error { Text(error).foregroundStyle(.red) }
@@ -76,8 +76,8 @@ struct RecoveryView: View {
                 Section {
                     if mode == .profile || mode == .forgot { TextField("Электронная почта", text: $email).textContentType(.emailAddress).keyboardType(.emailAddress).textInputAutocapitalization(.never).autocorrectionDisabled() }
                     if mode == .verify || mode == .reset { TextField("Ссылка из письма", text: $link).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled() }
-                    if mode == .profile || mode == .reset { SecureField(mode == .profile ? "Текущий пароль" : "Новый пароль", text: $password).textContentType(mode == .profile ? .password : .newPassword) }
-                    if mode == .reset { SecureField("Повторите новый пароль", text: $repeated).textContentType(.newPassword) }
+                    if mode == .profile || mode == .reset { PasswordField(mode == .profile ? "Текущий пароль" : "Новый пароль", text: $password, contentType: mode == .profile ? .password : .newPassword) }
+                    if mode == .reset { PasswordField("Повторите новый пароль", text: $repeated, contentType: .newPassword) }
                     Button(busy ? "Подождите…" : mode == .verify ? "Подтвердить почту" : mode == .reset ? "Сохранить пароль" : "Отправить письмо") { Task { await submit() } }
                 }.disabled(busy || !ready || !enabled)
             }
