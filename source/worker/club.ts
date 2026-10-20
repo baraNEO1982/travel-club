@@ -1,7 +1,7 @@
 import { scrypt, timingSafeEqual } from 'node:crypto';
 import { Buffer } from 'node:buffer';
 import {emailReady,sendAccountEmail,type EmailEnv} from './email';
-interface Env extends EmailEnv { DB:D1Database; PHOTOS:KVNamespace; ASSETS:Fetcher; }
+interface Env extends EmailEnv { PUBLIC_ORIGIN?:string; DB:D1Database; PHOTOS:KVNamespace; ASSETS:Fetcher; }
 const now=()=>Math.floor(Date.now()/1000);
 const token=()=>crypto.randomUUID().replaceAll('-','')+crypto.randomUUID().replaceAll('-','');
 const hash=async(s:string)=>Buffer.from(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(s))).toString('hex');
@@ -23,7 +23,7 @@ async function accountMail(env:Env,userId:string,email:string,purpose:'verify'|'
  if(!emailReady(env))fail(503,'Отправка писем ещё не подключена. Вход по логину и паролю работает.');
  await rate(env,'mail-total',150,86400);const raw=token(),digest=await hash(raw);
  const inserted=await env.DB.prepare('INSERT INTO email_tokens(hash,user_id,email,purpose,expires) SELECT ?,id,?,?,? FROM members WHERE id=? AND active=1 AND (? IS NULL OR password=?)').bind(digest,email,purpose,now()+1800,userId,expectedPassword,expectedPassword).run();if(!inserted.meta.changes)fail(401,'Пароль изменился. Войдите снова.');
- try{await sendAccountEmail(env,email,'https://travel-club.baraneo-family-club.workers.dev/#'+(purpose==='verify'?'verify-email':'reset-password')+'='+raw,purpose);}catch{await env.DB.prepare('DELETE FROM email_tokens WHERE hash=?').bind(digest).run();fail(503,'Не удалось отправить письмо. Попробуйте позже.');}
+ try{await sendAccountEmail(env,email,(env.PUBLIC_ORIGIN||'https://travel-club.baraneo-family-club.workers.dev')+'/#'+(purpose==='verify'?'verify-email':'reset-password')+'='+raw,purpose);}catch{await env.DB.prepare('DELETE FROM email_tokens WHERE hash=?').bind(digest).run();fail(503,'Не удалось отправить письмо. Попробуйте позже.');}
 }
 async function route(req:Request,env:Env,ctx:ExecutionContext){const url=new URL(req.url);const path=url.pathname;const post=req.method==='POST';if(!path.startsWith('/api/'))return env.ASSETS.fetch(req);
  if(!['GET','POST'].includes(req.method))fail(405,'Метод недоступен.');

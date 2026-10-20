@@ -1,0 +1,21 @@
+[Unit]
+Description=Marshrut Club
+After=network.target
+[Service]
+User=marshrutclub
+Group=marshrutclub
+WorkingDirectory=/opt/marshrutclub
+Environment=NODE_ENV=production
+Environment=DATA_DIR=/var/lib/marshrutclub
+Environment=PUBLIC_ORIGIN=https://marshrutclub.ru
+ExecStart=/usr/local/bin/node /opt/marshrutclub/server/main.mjs
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/marshrutclub
+UMask=0077
+[Install]
+WantedBy=multi-user.target

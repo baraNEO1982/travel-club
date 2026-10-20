@@ -32,7 +32,7 @@ struct ClubError: LocalizedError {
 
 @MainActor
 final class ClubModel: ObservableObject {
-    static let origin = "https://travel-club.baraneo-family-club.workers.dev"
+    static let origin = "https://marshrutclub.ru"
     @Published var member: Member?
     @Published var journeys: [Journey] = []
     @Published var loadingJourneys = false
@@ -123,7 +123,8 @@ func clubToken(_ value: String, key: String) -> String? {
     let text = value.trimmingCharacters(in: .whitespacesAndNewlines)
     let candidate: String
     if text.count == 64 { candidate = text }
-    else if let url = URLComponents(string: text), url.scheme == "https", url.host == "travel-club.baraneo-family-club.workers.dev", let fragment = url.fragment,
+    else if let url = URLComponents(string: text), url.scheme == "https",
+            ["marshrutclub.ru", "travel-club.baraneo-family-club.workers.dev"].contains(url.host ?? ""), let fragment = url.fragment,
             let token = URLComponents(string: "?" + fragment)?.queryItems?.first(where: { $0.name == key })?.value { candidate = token }
     else { return nil }
     return candidate.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil ? candidate : nil
