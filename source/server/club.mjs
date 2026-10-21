@@ -223,6 +223,12 @@ async function route(req, env, ctx) {
     await env.DB.prepare("INSERT INTO invitations(hash,creator,expires) VALUES(?,?,?)").bind(await hash(raw), m.id, now() + 604800).run();
     return json({ token: raw }, 201);
   }
+  if (path === "/api/notifications" && !post) return json({ notifications: (await env.DB.prepare("SELECT n.id,n.trip_id,n.created_at,n.read_at,t.title,m.name AS inviter FROM trip_notifications n JOIN trips t ON t.id=n.trip_id JOIN members m ON m.id=t.author_id WHERE n.user_id=? ORDER BY n.created_at DESC,n.id DESC").bind(m.id).all()).results });
+  if (path === "/api/notifications/read" && post) {
+    const b = await data(req), id = str(b.id, 32, 32);
+    await env.DB.prepare("UPDATE trip_notifications SET read_at=COALESCE(read_at,?) WHERE id=? AND user_id=?").bind(now(), id, m.id).run();
+    return json({ ok: true });
+  }
   if (path === "/api/trip-invites/accept" && post) {
     const b = await data(req), digest = await hash(str(b.token, 64, 64));
     const row = await env.DB.prepare("SELECT ti.trip_id,ti.claimed_by,i.expires FROM trip_invites ti JOIN invitations i ON i.hash=ti.hash JOIN members creator ON creator.id=i.creator WHERE ti.hash=? AND creator.active=1").bind(digest).first();

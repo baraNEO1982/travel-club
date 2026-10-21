@@ -8,7 +8,7 @@ import worker from './club.mjs';
 const dir=await mkdtemp(join(tmpdir(),'club-portable-'));
 const env=await storage(dir);env.ASSETS={fetch:()=>new Response('test')};
 try{
- for(const f of ['0001.sql','0002_story_details.sql','0003_email_recovery.sql','0004_routes.sql','0005_companions.sql'])env.sqlite.exec(await readFile(new URL('../database/club/'+f,import.meta.url),'utf8'));
+ for(const f of ['0001.sql','0002_story_details.sql','0003_email_recovery.sql','0004_routes.sql','0005_companions.sql','0006_notifications.sql'])env.sqlite.exec(await readFile(new URL('../database/club/'+f,import.meta.url),'utf8'));
  const invitation=randomBytes(32).toString('hex');env.sqlite.prepare('INSERT INTO invitations(hash,expires) VALUES(?,?)').run(createHash('sha256').update(invitation).digest('hex'),Math.floor(Date.now()/1000)+600);
  let cookie='';const call=async(path,body,extra={})=>worker.fetch(new Request('https://club.test/api'+path,{method:body===undefined?'GET':'POST',headers:{origin:'https://club.test','content-type':'application/json',cookie,...extra},body:body===undefined?undefined:JSON.stringify(body)}),env,{waitUntil:p=>p.catch(()=>{})});
  assert.equal((await call('/trips')).status,401);
@@ -56,6 +56,12 @@ try{
  cookie=ownerCookie;await call('/trips/'+id+'/team',{userId:friendId,remove:true});const invitation3=(await (await call('/trips/'+id+'/trip-invite',{})).json()).token;
  cookie=friendCookie;assert.equal((await call('/trip-invites/accept',{token:invitation3})).status,200);assert.equal((await (await call('/trips/'+id+'/team')).json()).canContribute,true);
  assert.equal((await call('/register',{username:'reused',name:'Reused',password:'synthetic test password',invite:invitation3})).status,403);
- cookie='';assert.equal((await call('/photos/'+photo)).status,401);
+ cookie=friendCookie;const inbox=(await (await call('/notifications')).json()).notifications;assert.equal(inbox.length,1);assert.equal(inbox[0].read_at,null);assert.equal(inbox[0].trip_id,id);
+ cookie=ownerCookie;assert.equal((await (await call('/notifications')).json()).notifications.length,0);await call('/notifications/read',{id:inbox[0].id});
+ cookie=friendCookie;assert.equal((await (await call('/notifications')).json()).notifications[0].read_at,null);await call('/notifications/read',{id:inbox[0].id});assert.ok((await (await call('/notifications')).json()).notifications[0].read_at);
+ cookie=ownerCookie;await call('/trips/'+id+'/team',{userId:friendId});cookie=friendCookie;assert.ok((await (await call('/notifications')).json()).notifications[0].read_at);
+ cookie=ownerCookie;await call('/trips/'+id+'/team',{userId:friendId,remove:true});cookie=friendCookie;assert.equal((await (await call('/notifications')).json()).notifications.length,0);
+ cookie=ownerCookie;await call('/trips/'+id+'/team',{userId:friendId});cookie=friendCookie;assert.equal((await (await call('/notifications')).json()).notifications[0].read_at,null);
+ cookie='';assert.equal((await call('/notifications')).status,401);assert.equal((await call('/photos/'+photo)).status,401);
  console.log('Portable database, registration, private photos and comments checks passed');
 }finally{env.sqlite.close();await rm(dir,{recursive:true,force:true});}
