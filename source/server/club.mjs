@@ -250,11 +250,14 @@ async function route(req, env, ctx) {
     const b = await data(req);
     if (!Number.isInteger(b.version) || b.version < 0) fail(400, "\u041E\u0431\u043D\u043E\u0432\u0438\u0442\u0435 \u043C\u0430\u0440\u0448\u0440\u0443\u0442.");
     if (!Array.isArray(b.stops) || b.stops.length > 30) fail(400, "\u0412 \u043C\u0430\u0440\u0448\u0440\u0443\u0442\u0435 \u043C\u043E\u0436\u0435\u0442 \u0431\u044B\u0442\u044C \u0434\u043E 30 \u043E\u0441\u0442\u0430\u043D\u043E\u0432\u043E\u043A.");
+    const allowedPhotos = new Set((await env.DB.prepare("SELECT id FROM photos WHERE trip_id=? AND ready=1").bind(tid).all()).results.map((p) => p.id));
     const stops = b.stops.map((s) => {
       if (!s || typeof s !== "object") fail(400, "\u041F\u0440\u043E\u0432\u0435\u0440\u044C\u0442\u0435 \u043E\u0441\u0442\u0430\u043D\u043E\u0432\u043A\u0438.");
       const lat = s.lat, lon = s.lon;
       if ((lat !== null || lon !== null) && (!Number.isFinite(lat) || !Number.isFinite(lon) || lat < -85 || lat > 85 || lon < -180 || lon > 180)) fail(400, "\u0423\u043A\u0430\u0436\u0438\u0442\u0435 \u043E\u0431\u0435 \u043A\u043E\u043E\u0440\u0434\u0438\u043D\u0430\u0442\u044B: \u0448\u0438\u0440\u043E\u0442\u0443 \u043E\u0442 \u221285 \u0434\u043E 85 \u0438 \u0434\u043E\u043B\u0433\u043E\u0442\u0443 \u043E\u0442 \u2212180 \u0434\u043E 180.");
-      return { title: str(s.title, 120), note: str(s.note, 600, 0), lat, lon };
+      const photoIds = s.photoIds ?? [];
+      if (!Array.isArray(photoIds) || photoIds.length > 100 || photoIds.some((id) => typeof id !== "string" || !allowedPhotos.has(id))) fail(400, "\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u0444\u043E\u0442\u043E\u0433\u0440\u0430\u0444\u0438\u0438 \u044D\u0442\u043E\u0433\u043E \u043F\u0443\u0442\u0435\u0448\u0435\u0441\u0442\u0432\u0438\u044F.");
+      return { title: str(s.title, 120), note: str(s.note, 600, 0), lat, lon, photoIds: [...new Set(photoIds)] };
     });
     const content = JSON.stringify({ stops, transport: str(b.transport, 2e3, 0), budget: str(b.budget, 2e3, 0), packing: str(b.packing, 2e3, 0), advice: str(b.advice, 2e3, 0) });
     const changed = await env.DB.prepare("INSERT INTO trip_routes(trip_id,content,version) SELECT ?,?,1 WHERE ?=0 ON CONFLICT(trip_id) DO UPDATE SET content=excluded.content,version=trip_routes.version+1 WHERE trip_routes.version=?").bind(tid, content, b.version, b.version).run();

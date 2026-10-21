@@ -30,6 +30,10 @@ try{
  cookie='';assert.equal((await call('/trips/'+id+'/route')).status,401);cookie=ownerCookie;
  const photo=crypto.randomUUID(),bytes=new Uint8Array([255,216,255,224,1,2]);
  const uploaded=await worker.fetch(new Request('https://club.test/api/trips/'+id+'/photos',{method:'POST',headers:{origin:'https://club.test',cookie,'X-Photo-Id':photo},body:bytes}),env,{});assert.equal(uploaded.status,201);
+ const withPhoto={...payload,version:2,stops:[{...payload.stops[0],photoIds:[photo]}]};
+ assert.equal((await call('/trips/'+id+'/route',withPhoto)).status,200);
+ assert.deepEqual((await (await call('/trips/'+id+'/route')).json()).stops[0].photoIds,[photo]);
+ assert.equal((await call('/trips/'+id+'/route',{...withPhoto,version:3,stops:[{...payload.stops[0],photoIds:[crypto.randomUUID()]}]})).status,400);
  assert.deepEqual(new Uint8Array(await (await call('/photos/'+photo)).arrayBuffer()),bytes);
  assert.equal((await call('/photos/'+photo+'/comments',{body:'Nice photo'})).status,201);
  assert.equal((await call('/photos/'+photo+'/details')).status,200);

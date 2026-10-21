@@ -2,7 +2,7 @@
 import {useEffect,useState} from 'react';
 import {RouteMap} from './route-map';
 import {api} from '@/lib/club-api';
-type Stop={title:string;note:string;lat:number|null;lon:number|null};
+type Stop={title:string;note:string;lat:number|null;lon:number|null;photoIds?:string[]};
 type Route={stops:Stop[];transport:string;budget:string;packing:string;advice:string;version:number};
 const fields=[['transport','Как добраться'],['budget','Расходы и даты поездки'],['packing','Что взять с собой'],['advice','Советы и что сделали бы иначе']] as const;
 export function TripRoute({tripId,canEdit}:{tripId:string;canEdit:boolean}){
