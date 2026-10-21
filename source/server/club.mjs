@@ -223,10 +223,65 @@ async function route(req, env, ctx) {
     await env.DB.prepare("INSERT INTO invitations(hash,creator,expires) VALUES(?,?,?)").bind(await hash(raw), m.id, now() + 604800).run();
     return json({ token: raw }, 201);
   }
+  if (path === "/api/trip-invites/accept" && post) {
+    const b = await data(req), digest = await hash(str(b.token, 64, 64));
+    const row = await env.DB.prepare("SELECT ti.trip_id,ti.claimed_by,i.expires FROM trip_invites ti JOIN invitations i ON i.hash=ti.hash JOIN members creator ON creator.id=i.creator WHERE ti.hash=? AND creator.active=1").bind(digest).first();
+    if (!row || row.expires <= now() || row.claimed_by && row.claimed_by !== m.id) fail(403, "\u041F\u0440\u0438\u0433\u043B\u0430\u0448\u0435\u043D\u0438\u0435 \u0438\u0441\u0442\u0435\u043A\u043B\u043E \u0438\u043B\u0438 \u0438\u0441\u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u043D\u043E.");
+    if (!row.claimed_by) {
+      const result = await env.DB.prepare("UPDATE trip_invites SET claimed_by=? WHERE hash=? AND claimed_by IS NULL").bind(m.id, digest).run();
+      if (!result.meta.changes) fail(409, "\u041F\u0440\u0438\u0433\u043B\u0430\u0448\u0435\u043D\u0438\u0435 \u0443\u0436\u0435 \u0438\u0441\u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u043D\u043E.");
+    }
+    return json({ tripId: row.trip_id });
+  }
+  const collaboration = path.match(/^\/api\/trips\/([a-f0-9-]{36})\/(team|notes|trip-invite)$/);
+  if (collaboration) {
+    const tid = collaboration[1], action = collaboration[2];
+    const trip = await env.DB.prepare("SELECT author_id FROM trips WHERE id=?").bind(tid).first();
+    if (!trip) fail(404, "\u041F\u0443\u0442\u0435\u0448\u0435\u0441\u0442\u0432\u0438\u0435 \u043D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D\u043E.");
+    const owner = trip.author_id === m.id;
+    const participant = owner || !!await env.DB.prepare("SELECT user_id FROM trip_members WHERE trip_id=? AND user_id=?").bind(tid, m.id).first();
+    if (action === "team" && !post) {
+      const people = (await env.DB.prepare("SELECT id,name,username FROM members WHERE active=1 ORDER BY name").all()).results;
+      const ids = (await env.DB.prepare("SELECT user_id FROM trip_members WHERE trip_id=?").bind(tid).all()).results.map((x) => x.user_id);
+      return json({ ownerId: trip.author_id, canContribute: participant, people: people.filter((p) => owner || p.id === trip.author_id || ids.includes(p.id)), memberIds: ids });
+    }
+    if (action === "team" && post) {
+      if (!owner) fail(403, "\u041F\u043E\u043F\u0443\u0442\u0447\u0438\u043A\u0430\u043C\u0438 \u0443\u043F\u0440\u0430\u0432\u043B\u044F\u0435\u0442 \u0430\u0432\u0442\u043E\u0440 \u043F\u0443\u0442\u0435\u0448\u0435\u0441\u0442\u0432\u0438\u044F.");
+      const b = await data(req), uid = str(b.userId, 36, 36);
+      if (uid === trip.author_id) fail(400, "\u0410\u0432\u0442\u043E\u0440 \u0443\u0436\u0435 \u0443\u0447\u0430\u0441\u0442\u0432\u0443\u0435\u0442 \u0432 \u043F\u043E\u0435\u0437\u0434\u043A\u0435.");
+      if (!await env.DB.prepare("SELECT id FROM members WHERE id=? AND active=1").bind(uid).first()) fail(404, "\u0423\u0447\u0430\u0441\u0442\u043D\u0438\u043A \u043D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D.");
+      if (b.remove === true) await env.DB.prepare("DELETE FROM trip_members WHERE trip_id=? AND user_id=?").bind(tid, uid).run();
+      else await env.DB.prepare("INSERT OR IGNORE INTO trip_members(trip_id,user_id) VALUES(?,?)").bind(tid, uid).run();
+      return json({ ok: true });
+    }
+    if (action === "trip-invite" && post) {
+      if (!owner) fail(403, "\u041F\u0440\u0438\u0433\u043B\u0430\u0448\u0435\u043D\u0438\u0435 \u0441\u043E\u0437\u0434\u0430\u0451\u0442 \u0430\u0432\u0442\u043E\u0440 \u043F\u043E\u0435\u0437\u0434\u043A\u0438.");
+      await rate(env, "invite:" + m.id, 20, 86400);
+      const raw = token(), digest = await hash(raw);
+      await env.DB.prepare("INSERT INTO invitations(hash,creator,expires) VALUES(?,?,?)").bind(digest, m.id, now() + 604800).run();
+      await env.DB.prepare("INSERT INTO trip_invites(hash,trip_id) VALUES(?,?)").bind(digest, tid).run();
+      return json({ token: raw }, 201);
+    }
+    if (action === "notes" && !post) return json({ notes: (await env.DB.prepare("SELECT n.*,m.name AS author FROM trip_notes n JOIN members m ON m.id=n.author_id WHERE trip_id=? ORDER BY created_at,n.rowid").bind(tid).all()).results });
+    if (action === "notes" && post) {
+      if (!participant) fail(403, "\u0414\u043E\u0431\u0430\u0432\u043B\u044F\u0442\u044C \u0437\u0430\u043C\u0435\u0442\u043A\u0438 \u043C\u043E\u0433\u0443\u0442 \u043F\u043E\u043F\u0443\u0442\u0447\u0438\u043A\u0438.");
+      const b = await data(req), body = str(b.body, 1e4), id = str(b.id, 36, 36);
+      if (!/^[a-f0-9-]{36}$/.test(id)) fail(400, "\u041D\u0435\u043A\u043E\u0440\u0440\u0435\u043A\u0442\u043D\u044B\u0439 ID.");
+      const old = await env.DB.prepare("SELECT author_id,version,body FROM trip_notes WHERE id=? AND trip_id=?").bind(id, tid).first();
+      if (old) {
+        if (old.author_id !== m.id) fail(403, "\u041C\u043E\u0436\u043D\u043E \u043C\u0435\u043D\u044F\u0442\u044C \u0442\u043E\u043B\u044C\u043A\u043E \u0441\u0432\u043E\u0438 \u0437\u0430\u043C\u0435\u0442\u043A\u0438.");
+        if (old.body === body) return json({ id });
+        if (!Number.isInteger(b.version)) fail(400, "\u041E\u0431\u043D\u043E\u0432\u0438\u0442\u0435 \u0437\u0430\u043C\u0435\u0442\u043A\u0443.");
+        const result = await env.DB.prepare("UPDATE trip_notes SET body=?,version=version+1 WHERE id=? AND version=?").bind(body, id, b.version).run();
+        if (!result.meta.changes) fail(409, "\u0417\u0430\u043C\u0435\u0442\u043A\u0430 \u0443\u0436\u0435 \u0438\u0437\u043C\u0435\u043D\u0435\u043D\u0430. \u0421\u043A\u043E\u043F\u0438\u0440\u0443\u0439\u0442\u0435 \u0442\u0435\u043A\u0441\u0442 \u0438 \u043E\u0431\u043D\u043E\u0432\u0438\u0442\u0435 \u0441\u0442\u0440\u0430\u043D\u0438\u0446\u0443.");
+      } else await env.DB.prepare("INSERT INTO trip_notes(id,trip_id,author_id,body,created_at) VALUES(?,?,?,?,?)").bind(id, tid, m.id, body, now()).run();
+      return json({ id });
+    }
+  }
   if (path === "/api/trips" && !post) {
     const rows = await env.DB.prepare("SELECT t.*,m.name AS author FROM trips t JOIN members m ON m.id=t.author_id ORDER BY t.created_at DESC LIMIT 200").all();
-    const photos = await env.DB.prepare("SELECT id,trip_id,caption FROM photos WHERE ready=1 ORDER BY position").all();
-    return json({ trips: rows.results.map((t) => ({ ...t, photos: photos.results.filter((p) => p.trip_id === t.id).map((p) => "/api/photos/" + p.id), captions: Object.fromEntries(photos.results.filter((p) => p.trip_id === t.id).map((p) => ["/api/photos/" + p.id, p.caption])) })) });
+    const photos = await env.DB.prepare("SELECT id,trip_id,caption,author_id FROM photos WHERE ready=1 ORDER BY position").all();
+    return json({ trips: rows.results.map((t) => ({ ...t, photoAuthors: Object.fromEntries(photos.results.filter((p) => p.trip_id === t.id).map((p) => ["/api/photos/" + p.id, p.author_id])), photos: photos.results.filter((p) => p.trip_id === t.id).map((p) => "/api/photos/" + p.id), captions: Object.fromEntries(photos.results.filter((p) => p.trip_id === t.id).map((p) => ["/api/photos/" + p.id, p.caption])) })) });
   }
   if (path === "/api/trips" && post) {
     const b = await data(req), id = b.id ? str(b.id, 36, 36) : crypto.randomUUID();
@@ -283,9 +338,9 @@ async function route(req, env, ctx) {
   const photoDetails = path.match(/^\/api\/photos\/([a-f0-9-]{36})\/(details|caption|comments)$/);
   if (photoDetails) {
     const id = photoDetails[1], action = photoDetails[2];
-    const photo2 = await env.DB.prepare("SELECT p.caption,t.author_id FROM photos p JOIN trips t ON t.id=p.trip_id WHERE p.id=? AND p.ready=1").bind(id).first();
+    const photo2 = await env.DB.prepare("SELECT p.caption,p.author_id,m.name AS author FROM photos p JOIN members m ON m.id=p.author_id WHERE p.id=? AND p.ready=1").bind(id).first();
     if (!photo2) fail(404, "\u0424\u043E\u0442\u043E\u0433\u0440\u0430\u0444\u0438\u044F \u043D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D\u0430.");
-    if (action === "details" && !post) return json({ caption: photo2.caption, comments: (await env.DB.prepare("SELECT c.id,c.body,m.name AS author FROM photo_comments c JOIN members m ON m.id=c.author_id WHERE c.photo_id=? ORDER BY c.created_at,c.rowid").bind(id).all()).results });
+    if (action === "details" && !post) return json({ caption: photo2.caption, author: photo2.author, comments: (await env.DB.prepare("SELECT c.id,c.body,m.name AS author FROM photo_comments c JOIN members m ON m.id=c.author_id WHERE c.photo_id=? ORDER BY c.created_at,c.rowid").bind(id).all()).results });
     if (action === "caption" && post) {
       if (photo2.author_id !== m.id) fail(403, "\u041E\u043F\u0438\u0441\u0430\u043D\u0438\u0435 \u0444\u043E\u0442\u043E\u0433\u0440\u0430\u0444\u0438\u0438 \u043C\u043E\u0436\u0435\u0442 \u0438\u0437\u043C\u0435\u043D\u0438\u0442\u044C \u0442\u043E\u043B\u044C\u043A\u043E \u0430\u0432\u0442\u043E\u0440 \u043F\u0443\u0442\u0435\u0448\u0435\u0441\u0442\u0432\u0438\u044F.");
       const b = await data(req), caption = str(b.caption, 2e3, 0);
@@ -311,7 +366,7 @@ async function route(req, env, ctx) {
   const upload = path.match(/^\/api\/trips\/([a-f0-9-]{36})\/photos$/);
   if (upload && post) {
     const tid = upload[1];
-    if (!await env.DB.prepare("SELECT id FROM trips WHERE id=? AND author_id=?").bind(tid, m.id).first()) fail(403, "\u0424\u043E\u0442\u043E\u0433\u0440\u0430\u0444\u0438\u0438 \u043C\u043E\u0436\u0435\u0442 \u0434\u043E\u0431\u0430\u0432\u0438\u0442\u044C \u0442\u043E\u043B\u044C\u043A\u043E \u0430\u0432\u0442\u043E\u0440.");
+    if (!await env.DB.prepare("SELECT id FROM trips WHERE id=? AND (author_id=? OR EXISTS(SELECT 1 FROM trip_members WHERE trip_id=trips.id AND user_id=?))").bind(tid, m.id, m.id).first()) fail(403, "\u0424\u043E\u0442\u043E\u0433\u0440\u0430\u0444\u0438\u0438 \u043C\u043E\u0433\u0443\u0442 \u0434\u043E\u0431\u0430\u0432\u043B\u044F\u0442\u044C \u043F\u043E\u043F\u0443\u0442\u0447\u0438\u043A\u0438.");
     await rate(env, "photos:" + m.id, 100, 86400);
     if (Number(req.headers.get("content-length")) > 1e6) fail(413, "\u0424\u043E\u0442\u043E \u0441\u043B\u0438\u0448\u043A\u043E\u043C \u0431\u043E\u043B\u044C\u0448\u043E\u0435.");
     const bytes = await limitedBody(req, 1e6);
@@ -320,15 +375,15 @@ async function route(req, env, ctx) {
     if (magic[0] !== 255 || magic[1] !== 216 || magic[2] !== 255) fail(415, "\u041D\u0443\u0436\u043D\u0430 \u0444\u043E\u0442\u043E\u0433\u0440\u0430\u0444\u0438\u044F JPEG.");
     const id = req.headers.get("X-Photo-Id") || crypto.randomUUID();
     if (!/^[a-f0-9-]{36}$/.test(id)) fail(400, "\u041D\u0435\u043A\u043E\u0440\u0440\u0435\u043A\u0442\u043D\u044B\u0439 ID.");
-    const previous = await env.DB.prepare("SELECT trip_id,ready FROM photos WHERE id=?").bind(id).first();
+    const previous = await env.DB.prepare("SELECT trip_id,ready,author_id FROM photos WHERE id=?").bind(id).first();
     if (previous) {
-      if (previous.trip_id !== tid) fail(403, "\u041D\u0435\u0442 \u0434\u043E\u0441\u0442\u0443\u043F\u0430.");
+      if (previous.trip_id !== tid || previous.author_id !== m.id) fail(403, "\u041D\u0435\u0442 \u0434\u043E\u0441\u0442\u0443\u043F\u0430.");
       if (previous.ready) return json({ id, url: "/api/photos/" + id });
       fail(409, "\u0424\u043E\u0442\u043E \u0435\u0449\u0451 \u0437\u0430\u0433\u0440\u0443\u0436\u0430\u0435\u0442\u0441\u044F. \u041F\u043E\u0432\u0442\u043E\u0440\u0438\u0442\u0435 \u0447\u0435\u0440\u0435\u0437 \u043C\u0438\u043D\u0443\u0442\u0443.");
     }
     let r;
     try {
-      r = await env.DB.prepare("INSERT INTO photos(id,trip_id,size,position) SELECT ?,?,?,COUNT(*) FROM photos WHERE trip_id=? HAVING COUNT(*)<100").bind(id, tid, bytes.byteLength, tid).run();
+      r = await env.DB.prepare("INSERT INTO photos(id,trip_id,size,author_id,position) SELECT ?,?,?,?,COUNT(*) FROM photos WHERE trip_id=? HAVING COUNT(*)<100").bind(id, tid, bytes.byteLength, m.id, tid).run();
     } catch (e) {
       if (String(e).includes("CHECK constraint")) fail(413, "\u0411\u0435\u0441\u043F\u043B\u0430\u0442\u043D\u043E\u0435 \u043C\u0435\u0441\u0442\u043E \u0434\u043B\u044F \u0444\u043E\u0442\u043E\u0433\u0440\u0430\u0444\u0438\u0439 \u0437\u0430\u043F\u043E\u043B\u043D\u0435\u043D\u043E.");
       throw e;

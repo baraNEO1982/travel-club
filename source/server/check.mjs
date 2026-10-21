@@ -8,7 +8,7 @@ import worker from './club.mjs';
 const dir=await mkdtemp(join(tmpdir(),'club-portable-'));
 const env=await storage(dir);env.ASSETS={fetch:()=>new Response('test')};
 try{
- for(const f of ['0001.sql','0002_story_details.sql','0003_email_recovery.sql','0004_routes.sql'])env.sqlite.exec(await readFile(new URL('../database/club/'+f,import.meta.url),'utf8'));
+ for(const f of ['0001.sql','0002_story_details.sql','0003_email_recovery.sql','0004_routes.sql','0005_companions.sql'])env.sqlite.exec(await readFile(new URL('../database/club/'+f,import.meta.url),'utf8'));
  const invitation=randomBytes(32).toString('hex');env.sqlite.prepare('INSERT INTO invitations(hash,expires) VALUES(?,?)').run(createHash('sha256').update(invitation).digest('hex'),Math.floor(Date.now()/1000)+600);
  let cookie='';const call=async(path,body,extra={})=>worker.fetch(new Request('https://club.test/api'+path,{method:body===undefined?'GET':'POST',headers:{origin:'https://club.test','content-type':'application/json',cookie,...extra},body:body===undefined?undefined:JSON.stringify(body)}),env,{waitUntil:p=>p.catch(()=>{})});
  assert.equal((await call('/trips')).status,401);
@@ -38,6 +38,24 @@ try{
  assert.equal((await call('/photos/'+photo+'/comments',{body:'Nice photo'})).status,201);
  assert.equal((await call('/photos/'+photo+'/details')).status,200);
  assert.equal((await call('/trips',{title:'x',body:'x'},{origin:'https://evil.test'})).status,403);
+ const friendCookie=friend.headers.get('set-cookie').split(';')[0],friendId=(await friend.json()).user.id;
+ cookie=friendCookie;assert.equal((await call('/trips/'+id+'/notes',{id:crypto.randomUUID(),body:'No access'})).status,403);
+ cookie=ownerCookie;assert.equal((await call('/trips/'+id+'/team',{userId:friendId})).status,200);
+ cookie=friendCookie;const noteId=crypto.randomUUID();assert.equal((await call('/trips/'+id+'/notes',{id:noteId,body:'My memories'})).status,200);
+ assert.equal((await call('/trips/'+id+'/team',{userId:friendId})).status,403);
+ const friendPhoto=crypto.randomUUID();assert.equal((await worker.fetch(new Request('https://club.test/api/trips/'+id+'/photos',{method:'POST',headers:{origin:'https://club.test',cookie,'X-Photo-Id':friendPhoto},body:bytes}),env,{})).status,201);
+ assert.equal((await call('/photos/'+friendPhoto+'/caption',{caption:'My photo'})).status,200);
+ assert.equal((await call('/photos/'+photo+'/caption',{caption:'Not mine'})).status,403);
+ cookie=ownerCookie;assert.equal((await call('/photos/'+friendPhoto+'/caption',{caption:'Not mine'})).status,403);
+ assert.equal((await call('/trips/'+id+'/notes',{id:noteId,body:'Not mine',version:1})).status,403);
+ const tripInvite=(await (await call('/trips/'+id+'/trip-invite',{})).json()).token;
+ const newcomer=await call('/register',{username:'newcomer',name:'New',password:'synthetic test password',invite:tripInvite});assert.equal(newcomer.status,201);cookie=newcomer.headers.get('set-cookie').split(';')[0];
+ assert.equal((await (await call('/trips/'+id+'/team')).json()).canContribute,true);
+ assert.equal((await call('/trip-invites/accept',{token:tripInvite})).status,200);
+ cookie=friendCookie;assert.equal((await call('/trip-invites/accept',{token:tripInvite})).status,403);
+ cookie=ownerCookie;await call('/trips/'+id+'/team',{userId:friendId,remove:true});const invitation3=(await (await call('/trips/'+id+'/trip-invite',{})).json()).token;
+ cookie=friendCookie;assert.equal((await call('/trip-invites/accept',{token:invitation3})).status,200);assert.equal((await (await call('/trips/'+id+'/team')).json()).canContribute,true);
+ assert.equal((await call('/register',{username:'reused',name:'Reused',password:'synthetic test password',invite:invitation3})).status,403);
  cookie='';assert.equal((await call('/photos/'+photo)).status,401);
  console.log('Portable database, registration, private photos and comments checks passed');
 }finally{env.sqlite.close();await rm(dir,{recursive:true,force:true});}
