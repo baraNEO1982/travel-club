@@ -20,6 +20,11 @@ final class Mock: URLProtocol {
         case "/api/photos/p1/comments", "/api/trips/t1/comments":
             json = request.httpMethod == "POST" ? #"{"id":"c2","body":"Hello","author":"Tester"}"# : #"{"comments":[{"id":"c1","body":"Nice","author":"Other"}]}"#
         case "/api/photos/p1/caption": json = #"{"caption":"Updated"}"#
+        case "/api/notifications": json = #"{"notifications":[{"id":"n1","trip_id":"t1","title":"Trip","inviter":"Owner","created_at":1234,"read_at":null}]}"#
+        case "/api/trips/t1/team": json = #"{"ownerId":"u1","canContribute":true,"people":[{"id":"u1","name":"Owner","username":"owner"}],"memberIds":[]}"#
+        case "/api/trips/t1/notes": json = #"{"notes":[{"id":"note1","body":"Memory","author":"Owner","author_id":"u1","version":1}]}"#
+        case "/api/trips/t1/route": json = #"{"stops":[{"title":"Lake","note":"Camp","lat":50.5,"lon":131.3,"photoIds":["p1"]}],"transport":"Boat","budget":"","packing":"","advice":"","version":2}"#
+        case "/api/trip-invites/accept": json = #"{"tripId":"t1"}"#
         case "/api/invites": json = "{\"token\":\"" + String(repeating: "a", count: 64) + "\"}"
         case "/api/recovery/status", "/api/account/email": json = #"{"enabled":false,"email":null}"#
         case "/api/password/request": status = 503; json = #"{"error":"Отправка писем ещё не подключена."}"#
@@ -37,6 +42,18 @@ final class Mock: URLProtocol {
         await model.authenticate(username: "test", password: "test password")
         precondition(model.member != nil && model.journeysLoaded && model.journeys.count == 1)
         precondition(model.journeys[0].photos == ["/api/photos/p1"] && model.journeys[0].version == 2)
+        let route:TripRoute = try await model.api("/trips/t1/route")
+        precondition(route.stops[0].photoIds == ["p1"] && route.version == 2)
+        var edited=route;edited.stops.append(RouteStop(title:"No GPS",note:"",lat:nil,lon:nil,photoIds:[]))
+        let payload=try edited.payload();let encodedStops=payload["stops"] as! [[String:Any]]
+        precondition(encodedStops[1]["lat"] is NSNull && encodedStops[0]["photoIds"] as? [String] == ["p1"])
+        precondition(JSONSerialization.isValidJSONObject(payload))
+        let team:TripTeam = try await model.api("/trips/t1/team");precondition(team.canContribute && team.ownerId == "u1")
+        let notes:TripNotes = try await model.api("/trips/t1/notes");precondition(notes.notes[0].version == 1)
+        await model.refreshNotifications();precondition(model.notifications.count == 1 && model.notifications[0].read_at == nil)
+        await model.readNotice(model.notifications[0]);precondition(Mock.log.contains{$0.url?.path == "/api/notifications/read" && $0.httpMethod == "POST"})
+        let joined:TripJoined = try await model.api("/trip-invites/accept",body:["token":String(repeating:"a",count:64)]);precondition(joined.tripId == "t1")
+        precondition(clubToken(ClubModel.origin+"/#trip-invite="+String(repeating:"a",count:64),key:"trip-invite") != nil)
         let details: PhotoDetails = try await model.api("/photos/p1/details")
         precondition(details.caption == "Sunrise" && details.comments.count == 1)
         let comment: ClubComment = try await model.api("/photos/p1/comments", body: ["body":"Hello"])

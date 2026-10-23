@@ -7,6 +7,7 @@ struct PendingPhoto: Identifiable { let id: String; let data: Data }
 struct JourneyEditor: View {
     @ObservedObject var club: ClubModel
     let trip: Journey?
+    let photosOnly: Bool
     @Environment(\.dismiss) private var dismiss
     @State private var title: String
     @State private var place: String
@@ -23,16 +24,17 @@ struct JourneyEditor: View {
     @State private var confirmClose = false
     @State private var tripID: String
     @State private var mutation = UUID().uuidString.lowercased()
-    init(club: ClubModel, trip: Journey?) {
+    init(club: ClubModel, trip: Journey?, photosOnly: Bool = false) {
+        self.photosOnly = photosOnly
         self.club = club; self.trip = trip
         _title = State(initialValue: trip?.title ?? ""); _place = State(initialValue: trip?.place ?? "")
         _story = State(initialValue: trip?.body ?? ""); _tripID = State(initialValue: trip?.id ?? UUID().uuidString.lowercased())
     }
-    private var valid: Bool { !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && title.count <= 140 && place.count <= 120 && !story.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && story.count <= 30000 }
+    private var valid: Bool { if photosOnly { return !photos.isEmpty }; return !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && title.count <= 140 && place.count <= 120 && !story.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && story.count <= 30000 }
     var body: some View {
         NavigationStack {
             Form {
-                storyFields
+                if !photosOnly { storyFields }
                 photoFields
                 if started { Section { Text("Сохранение началось. При сбое повторите отправку: уже сохранённый рассказ и фото не будут продублированы.").font(.footnote) } }
                 if let error { Section { Text(error).foregroundStyle(.red).textSelection(.enabled) } }
@@ -40,7 +42,7 @@ struct JourneyEditor: View {
                 Button(busy ? "Сохраняем…" : started ? "Повторить сохранение" : "Сохранить путешествие") { Task { await save() } }
                     .disabled(busy || preparing || !valid)
             }
-            .navigationTitle(trip == nil ? "Новое путешествие" : "Дополнить рассказ")
+            .navigationTitle(photosOnly ? "Добавить фотографии" : trip == nil ? "Новое путешествие" : "Дополнить рассказ")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Закрыть") { confirmClose = true }.disabled(busy || preparing) } }
             .confirmationDialog("Закрыть редактор? Несохранённые изменения будут потеряны. Уже отправленные данные останутся в клубе.", isPresented: $confirmClose, titleVisibility: .visible) { Button("Закрыть", role: .destructive) { Task { if started { await club.refresh() }; dismiss() } } }
@@ -88,7 +90,7 @@ struct JourneyEditor: View {
     private func save() async {
         guard !busy, valid else { return }; busy = true; started = true; error = nil; defer { busy = false }
         do {
-            if !savedStory {
+            if !savedStory && !photosOnly {
                 progress = "Сохраняем рассказ…"
                 var body: [String: Any] = ["title": title, "place": place, "body": story]
                 if let trip { body["version"] = trip.version; body["mutation"] = mutation }

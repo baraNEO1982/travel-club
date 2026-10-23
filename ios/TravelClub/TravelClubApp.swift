@@ -5,14 +5,32 @@ let clubNavy = Color(red: 0.09, green: 0.23, blue: 0.30)
     var body: some Scene { WindowGroup { ClubView() } }
 }
 struct ClubView: View {
-    @StateObject private var club = ClubModel()
+    @StateObject private var club: ClubModel
+    init() {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--ui-fixture") {
+            let config=URLSessionConfiguration.ephemeral;config.protocolClasses=[PreviewTransport.self]
+            let model=ClubModel(session:URLSession(configuration:config));model.member=Member(id:"demo-owner",name:"Автор")
+            _club=StateObject(wrappedValue:model)
+        } else {_club=StateObject(wrappedValue:ClubModel())}
+        #else
+        _club=StateObject(wrappedValue:ClubModel())
+        #endif
+    }
     @State private var sheet: ClubSheet?
+    @Environment(\.scenePhase) private var scenePhase
     var body: some View {
         NavigationStack {
             Group {
                 if let member = club.member {
                     List {
                         Section { Text("Привет, \(member.name)") }
+                        Section {
+                            NavigationLink { NotificationsView(club:club) } label: { Label("Уведомления (\(club.notifications.filter{$0.read_at == nil}.count))",systemImage:"bell") }
+                            ForEach(club.notifications.filter{$0.read_at == nil}) { n in
+                                if let trip=club.journeys.first(where:{$0.id==n.trip_id}) { NavigationLink {JourneyView(club:club,original:trip).task{await club.readNotice(n)}} label:{VStack(alignment:.leading){Text(n.inviter+" добавил(а) вас в попутчики").font(.caption);Text(n.title).bold()}} }
+                            }
+                        }
                         if club.loadingJourneys { ProgressView("Загружаем путешествия…") }
                         if let error = club.journeysError {
                             Section { Text(error).foregroundStyle(.red); Button("Повторить загрузку") { Task { await club.refresh() } } }
@@ -37,6 +55,7 @@ struct ClubView: View {
                         ToolbarItem(placement: .topBarLeading) {
                             Menu {
                                 Button("Пригласить близкого") { sheet = .invite }
+                                Button("Приглашение в поездку") {sheet = .join}
                                 Button("Моя почта") { sheet = .profile }
                                 Button("Выйти") { Task { await club.logout() } }.disabled(club.busy || club.loadingJourneys)
                             } label: { Label("Участник", systemImage: "person.crop.circle") }
@@ -49,8 +68,11 @@ struct ClubView: View {
         }
         .id(club.member?.id ?? "guest")
         .tint(clubNavy)
+        .task(id:club.member?.id) {await club.refresh();while club.member != nil && !Task.isCancelled {if scenePhase == .active{await club.refreshNotifications()};do{try await Task.sleep(for:.seconds(60))}catch{break}}}
+        .onChange(of:scenePhase){_,phase in if phase == .active && club.member != nil{Task{await club.refreshNotifications()}}}
         .sheet(item: $sheet) { selected in
             switch selected {
+            case .join: JoinJourneyView(club:club)
             case .write: JourneyEditor(club: club, trip: nil)
             case .invite: InviteView(club: club)
             case .register: RegistrationView(club: club)
@@ -59,7 +81,7 @@ struct ClubView: View {
         }
     }
 }
-enum ClubSheet: String, Identifiable { case write, invite, register, profile, forgot, reset, verify; var id: String { rawValue } }
+enum ClubSheet: String, Identifiable { case join, write, invite, register, profile, forgot, reset, verify; var id: String { rawValue } }
 struct LoginView: View {
     @ObservedObject var club: ClubModel
     @Binding var sheet: ClubSheet?
@@ -68,6 +90,7 @@ struct LoginView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
+                if let imageURL = Bundle.main.url(forResource:"bureya-hero",withExtension:"jpg"), let image = UIImage(contentsOfFile:imageURL.path) {Image(uiImage:image).resizable().scaledToFill().frame(height:190).clipped().clipShape(RoundedRectangle(cornerRadius:16)).accessibilityLabel("Бурея, Амурская область")}
                 Image(systemName: "safari").font(.system(size: 56)).foregroundStyle(clubNavy)
                 Text("Клуб\nпутешественников").font(.largeTitle.bold())
                 Text("Свои люди. Целый мир.").foregroundStyle(.secondary)

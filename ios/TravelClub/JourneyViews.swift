@@ -38,9 +38,11 @@ struct JourneyView: View {
                 Label(trip.place.isEmpty ? "Путешествие" : trip.place, systemImage: "mappin.and.ellipse")
                 Text(trip.author + " · " + Date(timeIntervalSince1970: trip.created_at).formatted(date: .abbreviated, time: .omitted)).font(.subheadline).foregroundStyle(.secondary)
                 if trip.author_id == club.member?.id { Button("Дополнить путешествие", systemImage: "square.and.pencil") { editing = true }.buttonStyle(.bordered) }
+                JourneyRouteView(club:club,trip:trip)
+                JourneyTeamView(club:club,trip:trip)
                 Text(trip.body).textSelection(.enabled)
                 ForEach(trip.photos, id: \.self) { path in
-                    PhotoDiscussion(club: club, path: path, initialCaption: trip.captions[path] ?? "", canEdit: trip.author_id == club.member?.id)
+                    PhotoDiscussion(club: club, path: path, initialCaption: trip.captions[path] ?? "", canEdit: (trip.photoAuthors?[path] ?? trip.author_id) == club.member?.id)
                 }
                 Divider()
                 CommentsView(club: club, path: "/trips/" + trip.id + "/comments", title: "Обсудим путешествие")
@@ -99,6 +101,7 @@ struct PhotoDiscussion: View {
     let path: String
     let initialCaption: String
     let canEdit: Bool
+    @State private var photoAuthor = ""
     @State private var caption = ""
     @State private var draft = ""
     @State private var comments: [ClubComment] = []
@@ -111,6 +114,7 @@ struct PhotoDiscussion: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             PrivatePhoto(club: club, path: path)
+            if !photoAuthor.isEmpty {Text("Фото: "+photoAuthor).font(.caption).foregroundStyle(.secondary)}
             if !(loaded ? caption : initialCaption).isEmpty { Text(loaded ? caption : initialCaption).font(.body.italic()) }
             if let error { Text(error).foregroundStyle(.red).font(.footnote) }
             if let notice { Text(notice).foregroundStyle(.secondary).font(.footnote) }
@@ -130,7 +134,7 @@ struct PhotoDiscussion: View {
     }
     private func load() async {
         guard !busy else { return }; busy = true; error = nil; defer { busy = false }
-        do { let result: PhotoDetails = try await club.api(endpoint + "/details"); caption = result.caption; draft = result.caption; comments = result.comments; loaded = true }
+        do { let result: PhotoDetails = try await club.api(endpoint + "/details"); photoAuthor = result.author ?? ""; caption = result.caption; draft = result.caption; comments = result.comments; loaded = true }
         catch { self.error = error.localizedDescription }
     }
     private func saveCaption() async {

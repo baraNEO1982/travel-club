@@ -11,7 +11,7 @@ struct RegistrationView: View {
         Form {
             Section { Text("Вставьте одноразовую ссылку, которую вам прислал участник клуба.")
                 TextField("Ссылка приглашения", text: $invitation).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
-                if !invitation.isEmpty && clubToken(invitation, key: "invite") == nil { Text("Нужна ссылка приглашения клуба или код из неё.").foregroundStyle(.red) }
+                if !invitation.isEmpty && (clubToken(invitation, key: "invite") ?? clubToken(invitation, key: "trip-invite")) == nil { Text("Нужна ссылка приглашения клуба или код из неё.").foregroundStyle(.red) }
             }
             Section("Ваша учётная запись") {
                 TextField("Имя", text: $name).textContentType(.name)
@@ -21,9 +21,9 @@ struct RegistrationView: View {
             }
             if let error = club.error { Text(error).foregroundStyle(.red) }
             Button(club.busy ? "Регистрируем…" : "Зарегистрироваться") {
-                guard let token = clubToken(invitation, key: "invite") else { return }
+                guard let token = (clubToken(invitation, key: "invite") ?? clubToken(invitation, key: "trip-invite")) else { return }
                 Task { await club.authenticate(username: username, password: password, name: name, invite: token); if club.member != nil { password = ""; dismiss() } }
-            }.disabled(club.busy || clubToken(invitation, key: "invite") == nil || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || name.count > 80 || username.range(of: "^[a-zA-Z0-9_]{3,32}$", options: .regularExpression) == nil || password.count < 12 || password.count > 128)
+            }.disabled(club.busy || (clubToken(invitation, key: "invite") ?? clubToken(invitation, key: "trip-invite")) == nil || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || name.count > 80 || username.range(of: "^[a-zA-Z0-9_]{3,32}$", options: .regularExpression) == nil || password.count < 12 || password.count > 128)
         }.disabled(club.busy).modifier(SheetHeader(title: "Регистрация по приглашению"))
     }
 }

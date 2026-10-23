@@ -14,11 +14,12 @@ struct Journey: Decodable, Identifiable {
     let version: Int
     let photos: [String]
     let captions: [String: String]
+    var photoAuthors: [String:String]? = nil
 }
 struct JourneysResponse: Decodable { let trips: [Journey] }
 struct ClubComment: Decodable, Identifiable { let id: String; let body: String; let author: String }
 struct CommentsResponse: Decodable { let comments: [ClubComment] }
-struct PhotoDetails: Decodable { let caption: String; let comments: [ClubComment] }
+struct PhotoDetails: Decodable { var author: String? = nil; let caption: String; let comments: [ClubComment] }
 struct MessageResponse: Decodable { let message: String }
 struct EmailStatus: Decodable { let enabled: Bool; let email: String? }
 struct InviteResponse: Decodable { let token: String }
@@ -38,6 +39,8 @@ final class ClubModel: ObservableObject {
     @Published var loadingJourneys = false
     @Published var journeysLoaded = false
     @Published var journeysError: String?
+    @Published var notifications: [ClubNotice] = []
+    @Published var notificationsError: String?
     @Published var busy = false
     @Published var error: String?
     // One private session for JSON and photos. No password or photo cache on disk.
@@ -105,7 +108,13 @@ final class ClubModel: ObservableObject {
         do { let result: JourneysResponse = try await api("/trips"); journeys = result.trips; journeysLoaded = true }
         catch { journeysError = error.localizedDescription }
     }
+    func refreshNotifications() async {
+        guard member != nil else{return};let id=member?.id
+        do {let result:ClubInbox = try await api("/notifications");if member?.id == id {notifications=result.notifications;notificationsError=nil}} catch {if member?.id == id{notificationsError=error.localizedDescription}}
+    }
+    func readNotice(_ notice:ClubNotice) async {do{_=try await request("/notifications/read",body:["id":notice.id]);await refreshNotifications()}catch{notificationsError=error.localizedDescription}}
     func clearSession() {
+        notifications=[];notificationsError=nil
         for cookie in session.configuration.httpCookieStorage?.cookies ?? [] { session.configuration.httpCookieStorage?.deleteCookie(cookie) }
         member = nil; journeys = []; journeysLoaded = false; journeysError = nil; error = nil
     }
